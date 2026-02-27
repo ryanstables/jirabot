@@ -1,4 +1,5 @@
 import { Version3Client } from 'jira.js';
+import type { Version3 } from 'jira.js';
 import type { JiraTicket, JiraComment } from '@jirabot/shared';
 import type { AgentConfig } from '@jirabot/shared';
 
@@ -34,10 +35,15 @@ export function createJiraService(config: JiraConfig): JiraService {
 
   return {
     async getTicket(ticketKey) {
-      const issue = await client.issues.getIssue({
-        issueIdOrKey: ticketKey,
-        fields: ['summary', 'description', 'comment', 'attachment', 'labels', 'assignee', 'project'],
-      });
+      let issue: Version3.Version3Models.Issue;
+      try {
+        issue = await client.issues.getIssue({
+          issueIdOrKey: ticketKey,
+          fields: ['summary', 'description', 'comment', 'attachment', 'labels', 'assignee', 'project'],
+        });
+      } catch (err) {
+        throw new Error(`Failed to fetch ticket ${ticketKey}: ${String(err)}`);
+      }
 
       const fields = issue.fields as Record<string, unknown>;
 
@@ -77,34 +83,51 @@ export function createJiraService(config: JiraConfig): JiraService {
     },
 
     async postComment(ticketKey, body) {
-      const result = await client.issueComments.addComment({
-        issueIdOrKey: ticketKey,
-        body: {
-          type: 'doc',
-          version: 1,
-          content: [
-            {
-              type: 'paragraph',
-              content: [{ type: 'text', text: body }],
-            },
-          ],
-        },
-      });
-      return String((result as Record<string, unknown>)['id']);
+      let result: Record<string, unknown>;
+      try {
+        result = await client.issueComments.addComment({
+          issueIdOrKey: ticketKey,
+          comment: {
+            type: 'doc',
+            version: 1,
+            content: [
+              {
+                type: 'paragraph',
+                content: [{ type: 'text', text: body }],
+              },
+            ],
+          },
+        }) as unknown as Record<string, unknown>;
+      } catch (err) {
+        throw new Error(`Failed to post comment on ${ticketKey}: ${String(err)}`);
+      }
+      const id = result['id'];
+      if (typeof id !== 'string' || !id) {
+        throw new Error(`postComment: Jira did not return a comment ID for ${ticketKey}`);
+      }
+      return id;
     },
 
     async transitionTicket(ticketKey, targetStatusName) {
-      const { transitions = [] } = await client.issues.getTransitions({ issueIdOrKey: ticketKey });
-      const transition = (transitions as Array<Record<string, unknown>>).find(
-        (t) => t['name'] === targetStatusName
-      );
+      let transitions: Array<Record<string, unknown>>;
+      try {
+        const result = await client.issues.getTransitions({ issueIdOrKey: ticketKey });
+        transitions = (result.transitions ?? []) as Array<Record<string, unknown>>;
+      } catch (err) {
+        throw new Error(`Failed to fetch transitions for ${ticketKey}: ${String(err)}`);
+      }
+      const transition = transitions.find((t) => t['name'] === targetStatusName);
       if (!transition) {
         throw new Error(`Transition not found: "${targetStatusName}"`);
       }
-      await client.issues.doTransition({
-        issueIdOrKey: ticketKey,
-        transition: { id: String(transition['id']) },
-      });
+      try {
+        await client.issues.doTransition({
+          issueIdOrKey: ticketKey,
+          transition: { id: String(transition['id']) },
+        });
+      } catch (err) {
+        throw new Error(`Failed to transition ${ticketKey} to "${targetStatusName}": ${String(err)}`);
+      }
     },
   };
 }
