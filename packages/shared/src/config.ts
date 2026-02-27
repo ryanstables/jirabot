@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-const BoardConfigSchema = z.object({
+export const BoardConfigSchema = z.object({
   jiraProject: z.string().min(1),
   githubRepo: z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'Must be "org/repo" format'),
   defaultBranch: z.string().min(1),
@@ -35,24 +35,39 @@ export function parseConfig(raw: unknown): AgentConfig {
   return AgentConfigSchema.parse(raw);
 }
 
+function requireEnv(name: string): string {
+  const val = process.env[name];
+  if (val === undefined || val === '') {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return val;
+}
+
 export function loadConfigFromEnv(): AgentConfig {
   return parseConfig({
     jira: {
-      host: process.env['JIRA_HOST'],
-      agentEmail: process.env['JIRA_AGENT_EMAIL'],
-      apiToken: process.env['JIRA_API_TOKEN'],
-      agentAccountId: process.env['JIRA_AGENT_ACCOUNT_ID'],
-      webhookSecret: process.env['JIRA_WEBHOOK_SECRET'],
+      host: requireEnv('JIRA_HOST'),
+      agentEmail: requireEnv('JIRA_AGENT_EMAIL'),
+      apiToken: requireEnv('JIRA_API_TOKEN'),
+      agentAccountId: requireEnv('JIRA_AGENT_ACCOUNT_ID'),
+      webhookSecret: requireEnv('JIRA_WEBHOOK_SECRET'),
     },
     github: {
-      appId: Number(process.env['GITHUB_APP_ID']),
-      privateKey: process.env['GITHUB_APP_PRIVATE_KEY'],
-      installationId: Number(process.env['GITHUB_APP_INSTALLATION_ID']),
+      appId: Number(requireEnv('GITHUB_APP_ID')),
+      privateKey: requireEnv('GITHUB_APP_PRIVATE_KEY'),
+      installationId: Number(requireEnv('GITHUB_APP_INSTALLATION_ID')),
     },
-    boards: JSON.parse(process.env['BOARDS_CONFIG'] ?? '[]'),
+    boards: (() => {
+      const raw = process.env['BOARDS_CONFIG'] ?? '[]';
+      try {
+        return JSON.parse(raw) as unknown;
+      } catch {
+        throw new Error('BOARDS_CONFIG is not valid JSON');
+      }
+    })(),
     codingAgent: 'claude-code',
     maxAttempts: Number(process.env['MAX_ATTEMPTS'] ?? '3'),
-    anthropicApiKey: process.env['ANTHROPIC_API_KEY'],
-    redisUrl: process.env['REDIS_URL'],
+    anthropicApiKey: requireEnv('ANTHROPIC_API_KEY'),
+    redisUrl: requireEnv('REDIS_URL'),
   });
 }

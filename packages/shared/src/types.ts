@@ -9,7 +9,7 @@ export interface JiraTicket {
   key: string;
   projectKey: string;
   summary: string;
-  description: string;
+  description: string | null;
   comments: JiraComment[];
   attachments: JiraAttachment[];
   labels: string[];
@@ -27,7 +27,7 @@ export interface JiraAttachment {
   id: string;
   filename: string;
   mimeType: string;
-  content: string;
+  contentUrl: string;
 }
 
 export interface JobPayload {
