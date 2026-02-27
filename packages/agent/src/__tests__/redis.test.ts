@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { TicketState } from '@jirabot/shared';
 
 // Mock ioredis
 vi.mock('ioredis', () => {
@@ -7,7 +6,7 @@ vi.mock('ioredis', () => {
   const MockRedis = vi.fn().mockImplementation(() => ({
     set: vi.fn((key: string, value: string) => { store.set(key, value); return Promise.resolve('OK'); }),
     get: vi.fn((key: string) => Promise.resolve(store.get(key) ?? null)),
-    del: vi.fn((key: string) => { store.delete(key); return Promise.resolve(1); }),
+    del: vi.fn((...keys: string[]) => { keys.forEach(k => store.delete(k)); return Promise.resolve(keys.length); }),
     rpush: vi.fn((key: string, ...values: string[]) => {
       const existing = JSON.parse(store.get(key) ?? '[]') as unknown[];
       values.forEach(v => existing.push(JSON.parse(v)));
@@ -19,14 +18,17 @@ vi.mock('ioredis', () => {
       return Promise.resolve(arr.map((v) => JSON.stringify(v)));
     }),
     quit: vi.fn(() => Promise.resolve('OK')),
+    on: vi.fn(),
   }));
-  return { default: MockRedis };
+  return { default: MockRedis, Redis: MockRedis };
 });
 
 describe('RedisStateService', () => {
-  let service: Awaited<ReturnType<typeof import('../services/redis.js').createRedisStateService>>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let service: any;
 
   beforeEach(async () => {
+    vi.resetModules();
     const { createRedisStateService } = await import('../services/redis.js');
     service = createRedisStateService('redis://localhost:6379');
   });
