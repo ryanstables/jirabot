@@ -1,0 +1,20 @@
+{
+  "name": "jirabot",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "dev:agent": "npm run dev -w packages/agent",
+    "dev:worker": "npm run dev -w packages/worker"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0",
+    "@types/node": "^22.0.0"
+  }
+}
