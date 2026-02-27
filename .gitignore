@@ -2,6 +2,10 @@ node_modules/
 dist/
 .env
 .env.local
-/tmp/
+tmp/
 *.tsbuildinfo
 .wrangler/
+.DS_Store
+*.log
+.fly/
+coverage/
