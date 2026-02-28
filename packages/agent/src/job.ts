@@ -55,9 +55,10 @@ export async function runJob(options: JobOptions): Promise<void> {
 
   // 3. Setup working directory
   const workDir = path.join(workDirBase, `job-${jobId}`);
-  await fs.mkdir(workDir, { recursive: true });
 
   try {
+    await fs.mkdir(workDir, { recursive: true });
+
     // 4. Clone repo and create branch
     await git.cloneRepo(boardConfig.githubRepo, workDir, boardConfig.defaultBranch);
     const branch = await git.createBranch(workDir, ticketKey, ticket.summary);
@@ -97,7 +98,7 @@ export async function runJob(options: JobOptions): Promise<void> {
         });
 
         // 7. Comment and transition
-        await jira.postComment(ticketKey, `PR opened: ${prUrl}\n\nBranch: \`${branch}\``);
+        await jira.postComment(ticketKey, `✅ PR opened: ${prUrl}\n\nBranch: \`${branch}\``);
         await jira.transitionTicket(ticketKey, boardConfig.targetStatus);
         await redis.setTicketState(ticketKey, 'pr_opened');
 
@@ -152,7 +153,7 @@ Commit: \`${sha}\`${attemptsSection}
 }
 
 function buildEscalationComment(ticketKey: string, attemptSummaries: string[]): string {
-  return `JiraBot Escalation — I was unable to resolve this ticket after ${attemptSummaries.length} attempts.
+  return `🚨 **JiraBot Escalation** — I was unable to resolve this ticket after ${attemptSummaries.length} attempts.
 
 ## What was attempted
 
