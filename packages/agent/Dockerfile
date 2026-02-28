@@ -37,6 +37,7 @@ COPY --from=builder /app/packages/shared/package.json ./packages/shared/package.
 COPY --from=builder /app/packages/agent/dist ./packages/agent/dist
 COPY --from=builder /app/packages/agent/package.json ./packages/agent/package.json
 COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/package-lock.json ./package-lock.json
 
 # Install production dependencies only
 RUN npm ci --omit=dev --workspaces
