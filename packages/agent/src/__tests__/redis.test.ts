@@ -4,7 +4,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('ioredis', () => {
   const store = new Map<string, string>();
   const MockRedis = vi.fn().mockImplementation(() => ({
-    set: vi.fn((key: string, value: string) => { store.set(key, value); return Promise.resolve('OK'); }),
+    set: vi.fn((key: string, value: string, ...args: unknown[]) => {
+      const hasNx = args.includes('NX');
+      if (hasNx && store.has(key)) return Promise.resolve(null);
+      store.set(key, value);
+      return Promise.resolve('OK');
+    }),
     get: vi.fn((key: string) => Promise.resolve(store.get(key) ?? null)),
     del: vi.fn((...keys: string[]) => { keys.forEach(k => store.delete(k)); return Promise.resolve(keys.length); }),
     rpush: vi.fn((key: string, ...values: string[]) => {
@@ -56,5 +61,23 @@ describe('RedisStateService', () => {
     await service.clearTicket('PROJ-2');
     const state = await service.getTicketState('PROJ-2');
     expect(state).toBeNull();
+  });
+
+  it('tryClaimTicket returns true on first claim', async () => {
+    const claimed = await service.tryClaimTicket('PROJ-5');
+    expect(claimed).toBe(true);
+  });
+
+  it('tryClaimTicket returns false when ticket is already claimed', async () => {
+    await service.tryClaimTicket('PROJ-6');
+    const second = await service.tryClaimTicket('PROJ-6');
+    expect(second).toBe(false);
+  });
+
+  it('releaseTicketClaim allows re-claiming after release', async () => {
+    await service.tryClaimTicket('PROJ-7');
+    await service.releaseTicketClaim('PROJ-7');
+    const reclaimed = await service.tryClaimTicket('PROJ-7');
+    expect(reclaimed).toBe(true);
   });
 });

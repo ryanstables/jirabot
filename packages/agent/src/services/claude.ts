@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { JiraTicket, SufficiencyResult } from '@jirabot/shared';
+import type { JiraTicket, SufficiencyResult, SlackIntent } from '@jirabot/shared';
 
 const SUFFICIENCY_SYSTEM_PROMPT = `You are a software engineering triage assistant.
 Given a Jira ticket, determine whether it contains sufficient information for a developer to begin implementation.
@@ -18,7 +18,8 @@ If sufficient is false, questions must list the specific missing information nee
 
 export interface ClaudeService {
   checkSufficiency(ticket: JiraTicket): Promise<SufficiencyResult>;
-  buildCodingPrompt(ticket: JiraTicket): string;
+  buildCodingPrompt(ticket: JiraTicket, repoPaths?: string[]): string;
+  parseSlackIntent(text: string, projectKeys: string[]): Promise<SlackIntent>;
 }
 
 export function createClaudeService(apiKey: string): ClaudeService {
@@ -58,10 +59,20 @@ export function createClaudeService(apiKey: string): ClaudeService {
       return { sufficient: parsed['sufficient'], questions: parsed['questions'] as string[] };
     },
 
-    buildCodingPrompt(ticket) {
+    buildCodingPrompt(ticket, repoPaths) {
       const comments = ticket.comments
         .map((c) => `- ${c.body} (${c.created})`)
         .join('\n');
+
+      const multiRepoSection = repoPaths && repoPaths.length > 1
+        ? `## Repository Layout
+This ticket requires coordinated changes across multiple repositories. All repos are cloned into your working directory:
+${repoPaths.map((p, i) => `- \`${p}/\` — ${i === 0 ? 'primary repository' : `secondary repository ${i}`}`).join('\n')}
+
+Make all necessary changes across the repositories. You may read and write files in any of the listed directories.
+
+`
+        : '';
 
       return `# Jira Ticket: ${ticket.key}
 
@@ -79,7 +90,7 @@ ${ticket.labels.join(', ') || 'None'}
 
 ---
 
-You are an expert software engineer. Your task is to resolve the Jira ticket above by writing production-quality code.
+${multiRepoSection}You are an expert software engineer. Your task is to resolve the Jira ticket above by writing production-quality code.
 
 Instructions:
 1. Explore the codebase to understand the relevant code and context
@@ -89,6 +100,45 @@ Instructions:
 5. Commit your changes with a clear commit message referencing the ticket key
 
 Focus only on what is described in the ticket. Do not refactor unrelated code.`;
+    },
+
+    async parseSlackIntent(text, projectKeys) {
+      const systemPrompt = `You are a Jira assistant that interprets user messages and extracts intent.
+
+Available Jira project keys: ${projectKeys.join(', ')}.
+
+Given the user's message, respond ONLY with valid JSON matching one of these schemas:
+
+If the user wants to create a Jira ticket:
+{ "action": "create_ticket", "projectKey": "<best matching project key>", "summary": "<concise ticket title>", "description": "<detailed description>" }
+
+For any other message:
+{ "action": "unknown", "response": "<helpful reply explaining what you can do>" }
+
+Do not include any text outside the JSON object.`;
+
+      let response: Awaited<ReturnType<typeof client.messages.create>>;
+      try {
+        response = await client.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 512,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: text }],
+        });
+      } catch (err) {
+        throw new Error(`Failed to parse Slack intent: ${String(err)}`);
+      }
+
+      const textBlock = response.content.find((b) => b.type === 'text');
+      if (!textBlock || textBlock.type !== 'text') {
+        return { action: 'unknown', response: 'Sorry, I could not understand your request.' };
+      }
+
+      try {
+        return JSON.parse(textBlock.text) as SlackIntent;
+      } catch {
+        return { action: 'unknown', response: 'Sorry, I could not understand your request.' };
+      }
     },
   };
 }

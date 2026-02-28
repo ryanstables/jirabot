@@ -7,11 +7,15 @@ export interface RedisStateService {
   recordAttempt(ticketKey: string, record: AttemptRecord): Promise<void>;
   getAttempts(ticketKey: string): Promise<AttemptRecord[]>;
   clearTicket(ticketKey: string): Promise<void>;
+  // V2: self-assignment race-condition guard
+  tryClaimTicket(ticketKey: string): Promise<boolean>;
+  releaseTicketClaim(ticketKey: string): Promise<void>;
   quit(): Promise<void>;
 }
 
 const STATE_PREFIX = 'ticket:state:';
 const ATTEMPTS_PREFIX = 'ticket:attempts:';
+const CLAIM_PREFIX = 'ticket:claimed:';
 
 const VALID_STATES: ReadonlySet<string> = new Set<TicketState>([
   'awaiting_info', 'diagnosing', 'coding', 'pr_opened', 'escalated',
@@ -57,6 +61,16 @@ export function createRedisStateService(redisUrl: string): RedisStateService {
         `${STATE_PREFIX}${ticketKey}`,
         `${ATTEMPTS_PREFIX}${ticketKey}`,
       );
+    },
+
+    async tryClaimTicket(ticketKey) {
+      // SET NX with 1h TTL — returns 'OK' if set, null if already exists
+      const result = await client.set(`${CLAIM_PREFIX}${ticketKey}`, '1', 'EX', 3600, 'NX');
+      return result === 'OK';
+    },
+
+    async releaseTicketClaim(ticketKey) {
+      await client.del(`${CLAIM_PREFIX}${ticketKey}`);
     },
 
     async quit() {

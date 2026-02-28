@@ -20,6 +20,11 @@ export interface JiraService {
   getTicket(ticketKey: string): Promise<JiraTicket>;
   postComment(ticketKey: string, body: string): Promise<string>;
   transitionTicket(ticketKey: string, targetStatusName: string): Promise<void>;
+  // V2: self-assignment
+  searchTickets(jql: string, maxResults?: number): Promise<Array<{ key: string; projectKey: string; summary: string }>>;
+  assignTicket(ticketKey: string, accountId: string): Promise<void>;
+  // V2: Slack-driven ticket creation
+  createTicket(projectKey: string, summary: string, description: string): Promise<string>;
 }
 
 export function createJiraService(config: JiraConfig): JiraService {
@@ -136,6 +141,70 @@ export function createJiraService(config: JiraConfig): JiraService {
       } catch (err) {
         throw new Error(`Failed to transition ${ticketKey} to "${targetStatusName}": ${String(err)}`);
       }
+    },
+
+    async searchTickets(jql, maxResults = 50) {
+      let result: Record<string, unknown>;
+      try {
+        result = await client.issueSearch.searchForIssuesUsingJql({
+          jql,
+          maxResults,
+          fields: ['summary', 'project'],
+        }) as unknown as Record<string, unknown>;
+      } catch (err) {
+        throw new Error(`Failed to search tickets with JQL "${jql}": ${String(err)}`);
+      }
+      const issues = (result['issues'] as unknown[] ?? []);
+      return issues.map((i) => {
+        const issue = i as Record<string, unknown>;
+        const fields = issue['fields'] as Record<string, unknown>;
+        return {
+          key: String(issue['key']),
+          projectKey: String((fields['project'] as Record<string, unknown>)?.['key'] ?? ''),
+          summary: String(fields['summary'] ?? ''),
+        };
+      });
+    },
+
+    async assignTicket(ticketKey, accountId) {
+      try {
+        await client.issues.assignIssue({
+          issueIdOrKey: ticketKey,
+          assignee: { accountId },
+        });
+      } catch (err) {
+        throw new Error(`Failed to assign ticket ${ticketKey} to ${accountId}: ${String(err)}`);
+      }
+    },
+
+    async createTicket(projectKey, summary, description) {
+      let result: Record<string, unknown>;
+      try {
+        result = await client.issues.createIssue({
+          fields: {
+            project: { key: projectKey },
+            summary,
+            description: {
+              type: 'doc',
+              version: 1,
+              content: [
+                {
+                  type: 'paragraph',
+                  content: [{ type: 'text', text: description }],
+                },
+              ],
+            },
+            issuetype: { name: 'Task' },
+          },
+        }) as unknown as Record<string, unknown>;
+      } catch (err) {
+        throw new Error(`Failed to create ticket in project ${projectKey}: ${String(err)}`);
+      }
+      const key = result['key'];
+      if (typeof key !== 'string' || !key) {
+        throw new Error(`createTicket: Jira did not return a ticket key for project ${projectKey}`);
+      }
+      return key;
     },
   };
 }
