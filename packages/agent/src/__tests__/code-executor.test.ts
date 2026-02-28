@@ -1,10 +1,14 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('execa', () => ({
   execa: vi.fn(),
 }));
 
 describe('CodeExecutor', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
   it('writes prompt to file and invokes claude --print', async () => {
     const { execa } = await import('execa');
     const mockExeca = vi.mocked(execa);

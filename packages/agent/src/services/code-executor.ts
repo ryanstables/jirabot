@@ -31,9 +31,10 @@ const TEST_FAIL_PATTERNS = [
   /tests? fail/i,
   /\d+ fail/i,
   /assertion error/i,
+  /error:/i,
 ];
 
-function detectTestStatus(output: string): boolean {
+export function detectTestStatus(output: string): boolean {
   const hasPassing = TEST_PASS_PATTERNS.some((p) => p.test(output));
   const hasFailing = TEST_FAIL_PATTERNS.some((p) => p.test(output));
   // Pass if there's passing output and no failure indicators
