@@ -46,11 +46,16 @@ export function createClaudeService(apiKey: string): ClaudeService {
         throw new Error(`Unexpected Claude API response format for ${ticket.key}`);
       }
 
+      let parsed: Record<string, unknown>;
       try {
-        return JSON.parse(textBlock.text) as SufficiencyResult;
+        parsed = JSON.parse(textBlock.text) as Record<string, unknown>;
       } catch {
         throw new Error(`Failed to parse sufficiency response for ${ticket.key}: ${textBlock.text}`);
       }
+      if (typeof parsed['sufficient'] !== 'boolean' || !Array.isArray(parsed['questions'])) {
+        throw new Error(`Invalid sufficiency response shape for ${ticket.key}: ${textBlock.text}`);
+      }
+      return { sufficient: parsed['sufficient'], questions: parsed['questions'] as string[] };
     },
 
     buildCodingPrompt(ticket) {

@@ -47,6 +47,12 @@ export function createGitService(githubTokenBase: string): GitService {
     async commitAll(workDir, message) {
       const git = simpleGit(workDir);
       try {
+        const status = await git.status();
+        if (status.files.length === 0) {
+          // No changes to commit — return current HEAD SHA
+          const sha = await git.revparse(['HEAD']);
+          return sha.trim();
+        }
         await git.add('.');
         await git.commit(message);
         const sha = await git.revparse(['HEAD']);
