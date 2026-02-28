@@ -34,20 +34,36 @@ export function createGitHubService(config: GitHubConfig): GitHubService {
 
   return {
     async createPR({ repo, title, body, head, base }) {
-      const [owner, repoName] = repo.split('/') as [string, string];
-      const octokit = await getOctokit();
-      const { data } = await octokit.pulls.create({
-        owner,
-        repo: repoName,
-        title,
-        body,
-        head,
-        base,
-      });
-      return {
-        prUrl: data.html_url,
-        prNumber: data.number,
-      };
+      const slashIndex = repo.indexOf('/');
+      if (slashIndex === -1) {
+        throw new Error(`Invalid repo format "${repo}": expected "owner/repo"`);
+      }
+      const owner = repo.slice(0, slashIndex);
+      const repoName = repo.slice(slashIndex + 1);
+
+      let octokit: Octokit;
+      try {
+        octokit = await getOctokit();
+      } catch (err) {
+        throw new Error(`Failed to authenticate with GitHub App: ${String(err)}`);
+      }
+
+      try {
+        const { data } = await octokit.pulls.create({
+          owner,
+          repo: repoName,
+          title,
+          body,
+          head,
+          base,
+        });
+        return {
+          prUrl: data.html_url,
+          prNumber: data.number,
+        };
+      } catch (err) {
+        throw new Error(`Failed to create PR for ${repo} (${head} → ${base}): ${String(err)}`);
+      }
     },
   };
 }
