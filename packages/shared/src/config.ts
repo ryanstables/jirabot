@@ -1,11 +1,28 @@
 import { z } from 'zod';
 
+export const SecondaryRepoSchema = z.object({
+  githubRepo: z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'Must be "org/repo" format'),
+  defaultBranch: z.string().min(1),
+});
+
 export const BoardConfigSchema = z.object({
   jiraProject: z.string().min(1),
   githubRepo: z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'Must be "org/repo" format'),
   defaultBranch: z.string().min(1),
   targetStatus: z.string().min(1),
   escalationStatus: z.string().min(1),
+  // V2: multi-repo
+  secondaryRepos: z.array(SecondaryRepoSchema).default([]),
+  multiRepoLabel: z.string().default('multi-repo'),
+  // V2: self-assignment
+  autoAssignJql: z.string().optional(),
+  // V2: Slack notifications
+  slackChannel: z.string().optional(),
+});
+
+export const SlackConfigSchema = z.object({
+  botToken: z.string().min(1),
+  signingSecret: z.string().min(1),
 });
 
 export const AgentConfigSchema = z.object({
@@ -26,10 +43,16 @@ export const AgentConfigSchema = z.object({
   maxAttempts: z.number().positive().int().default(3),
   anthropicApiKey: z.string().min(1),
   redisUrl: z.string().url(),
+  // V2: Slack integration
+  slack: SlackConfigSchema.optional(),
+  // V2: cron schedule for self-assignment scan
+  scanCronSchedule: z.string().default('*/5 * * * *'),
 });
 
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;
 export type BoardConfig = z.infer<typeof BoardConfigSchema>;
+export type SlackConfig = z.infer<typeof SlackConfigSchema>;
+export type SecondaryRepoConfig = z.infer<typeof SecondaryRepoSchema>;
 
 export function parseConfig(raw: unknown): AgentConfig {
   return AgentConfigSchema.parse(raw);
@@ -43,7 +66,15 @@ function requireEnv(name: string): string {
   return val;
 }
 
+function optionalEnv(name: string): string | undefined {
+  const val = process.env[name];
+  return val !== undefined && val !== '' ? val : undefined;
+}
+
 export function loadConfigFromEnv(): AgentConfig {
+  const slackBotToken = optionalEnv('SLACK_BOT_TOKEN');
+  const slackSigningSecret = optionalEnv('SLACK_SIGNING_SECRET');
+
   return parseConfig({
     jira: {
       host: requireEnv('JIRA_HOST'),
@@ -69,5 +100,9 @@ export function loadConfigFromEnv(): AgentConfig {
     maxAttempts: Number(process.env['MAX_ATTEMPTS'] ?? '3'),
     anthropicApiKey: requireEnv('ANTHROPIC_API_KEY'),
     redisUrl: requireEnv('REDIS_URL'),
+    slack: slackBotToken && slackSigningSecret
+      ? { botToken: slackBotToken, signingSecret: slackSigningSecret }
+      : undefined,
+    scanCronSchedule: process.env['SCAN_CRON_SCHEDULE'] ?? '*/5 * * * *',
   });
 }
