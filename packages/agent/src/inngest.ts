@@ -11,7 +11,10 @@ import { createCodeExecutor } from './services/code-executor.js';
 import { createRedisStateService } from './services/redis.js';
 import { runJob } from './job.js';
 
-export const inngest = new Inngest({ id: 'jirabot' });
+export const inngest = new Inngest({
+  id: 'jirabot',
+  signingKey: process.env['INNGEST_SIGNING_KEY'],
+});
 
 export const processTicketJob = inngest.createFunction(
   {
@@ -36,6 +39,9 @@ export const processTicketJob = inngest.createFunction(
 
       const redis = createRedisStateService(config.redisUrl);
 
+      const githubService = createGitHubService(config.github);
+      const installationToken = await githubService.getInstallationToken();
+
       try {
         await runJob({
           ticketKey: payload.ticketKey,
@@ -43,9 +49,9 @@ export const processTicketJob = inngest.createFunction(
           boardConfig,
           services: {
             jira: createJiraService(config.jira),
-            github: createGitHubService(config.github),
+            github: githubService,
             claude: createClaudeService(config.anthropicApiKey),
-            git: createGitService(config.github.privateKey),
+            git: createGitService(installationToken),
             executor: createCodeExecutor({ maxTimeoutMs: 30 * 60 * 1000 }), // 30 min
             redis,
           },

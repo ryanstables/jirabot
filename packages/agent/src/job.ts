@@ -74,9 +74,11 @@ export async function runJob(options: JobOptions): Promise<void> {
       const result = await executor.run({ prompt, workDir, attempt });
 
       if (result.success && result.testsPass) {
+        // Get changed files BEFORE committing (post-commit working tree is clean)
+        const filesChanged = await git.getChangedFiles(workDir);
+
         // Commit whatever Claude Code produced
         const sha = await git.commitAll(workDir, `fix(${ticketKey}): resolve ${ticket.summary}`);
-        const filesChanged = await git.getChangedFiles(workDir);
 
         await redis.recordAttempt(ticketKey, {
           attempt,

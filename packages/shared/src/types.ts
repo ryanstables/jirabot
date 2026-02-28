@@ -37,14 +37,6 @@ export interface JobPayload {
   jobId: string;
 }
 
-export interface CodeResult {
-  testsPass: boolean;
-  branch: string;
-  commitSha: string;
-  failureSummary?: string;
-  filesChanged: string[];
-}
-
 export interface SufficiencyResult {
   sufficient: boolean;
   questions: string[];

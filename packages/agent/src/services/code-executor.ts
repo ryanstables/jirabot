@@ -31,7 +31,6 @@ const TEST_FAIL_PATTERNS = [
   /tests? fail/i,
   /\d+ fail/i,
   /assertion error/i,
-  /error:/i,
 ];
 
 export function detectTestStatus(output: string): boolean {

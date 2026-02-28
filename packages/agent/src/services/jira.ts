@@ -83,6 +83,19 @@ export function createJiraService(config: JiraConfig): JiraService {
     },
 
     async postComment(ticketKey, body) {
+      // Convert plain text with newlines to ADF paragraphs
+      const paragraphs = body.split(/\n\n+/).map((para) => {
+        const lines = para.split('\n');
+        const content: Array<Record<string, unknown>> = [];
+        lines.forEach((line, idx) => {
+          content.push({ type: 'text', text: line });
+          if (idx < lines.length - 1) {
+            content.push({ type: 'hardBreak' });
+          }
+        });
+        return { type: 'paragraph', content };
+      });
+
       let result: Record<string, unknown>;
       try {
         result = await client.issueComments.addComment({
@@ -90,12 +103,7 @@ export function createJiraService(config: JiraConfig): JiraService {
           comment: {
             type: 'doc',
             version: 1,
-            content: [
-              {
-                type: 'paragraph',
-                content: [{ type: 'text', text: body }],
-              },
-            ],
+            content: paragraphs as unknown as never,
           },
         }) as unknown as Record<string, unknown>;
       } catch (err) {

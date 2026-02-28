@@ -19,6 +19,7 @@ export interface PRResult {
 
 export interface GitHubService {
   createPR(options: PROptions): Promise<PRResult>;
+  getInstallationToken(): Promise<string>;
 }
 
 export function createGitHubService(config: GitHubConfig): GitHubService {
@@ -33,6 +34,22 @@ export function createGitHubService(config: GitHubConfig): GitHubService {
   }
 
   return {
+    async getInstallationToken() {
+      let token: string;
+      try {
+        const auth = createAppAuth({
+          appId: config.appId,
+          privateKey: config.privateKey,
+          installationId: config.installationId,
+        });
+        const result = await auth({ type: 'installation' });
+        token = result.token;
+      } catch (err) {
+        throw new Error(`Failed to get GitHub installation token: ${String(err)}`);
+      }
+      return token;
+    },
+
     async createPR({ repo, title, body, head, base }) {
       const slashIndex = repo.indexOf('/');
       if (slashIndex === -1) {

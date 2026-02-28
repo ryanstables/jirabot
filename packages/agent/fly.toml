@@ -2,7 +2,6 @@ app = "jirabot-agent"
 primary_region = "iad"
 
 [build]
-  dockerfile = "Dockerfile"
   dockerfile_path = "packages/agent/Dockerfile"
 
 [env]
