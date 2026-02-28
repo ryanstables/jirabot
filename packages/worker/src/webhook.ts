@@ -32,7 +32,7 @@ export async function validateJiraWebhook(
 
   let mismatch = 0;
   for (let i = 0; i < computedHex.length; i++) {
-    mismatch |= computedHex.charCodeAt(i) ^ (providedHex.charCodeAt(i) ?? 0);
+    mismatch |= computedHex.charCodeAt(i) ^ providedHex.charCodeAt(i);
   }
   return mismatch === 0;
 }

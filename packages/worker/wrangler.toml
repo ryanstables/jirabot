@@ -5,8 +5,6 @@ compatibility_date = "2024-07-25"
 [vars]
 JIRA_AGENT_ACCOUNT_ID = ""
 
-[[secrets]]
-name = "JIRA_WEBHOOK_SECRET"
-
-[[secrets]]
-name = "INNGEST_EVENT_KEY"
+# Required secrets (set via: wrangler secret put <NAME>):
+#   JIRA_WEBHOOK_SECRET
+#   INNGEST_EVENT_KEY

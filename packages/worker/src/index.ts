@@ -57,7 +57,7 @@ export default {
     }
 
     // Always return 200 so Jira doesn't retry — retry happens at queue level
-    console.log(`Enqueued job for ticket ${payload.ticketKey}`);
+    console.log(`Enqueued job ${payload.jobId} for ticket ${payload.ticketKey}`);
     return new Response('OK', { status: 200 });
   },
 };
