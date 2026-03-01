@@ -14,10 +14,7 @@ An autonomous AI coding agent that monitors a Jira board, interprets tickets, wr
 Admin assigns Jira ticket to the agent user
          │
          ▼
-Cloudflare Worker validates Jira webhook + enqueues job
-         │
-         ▼
-Inngest delivers job to Fly.io agent container
+Agent receives POST /webhook/jira (Jira sends directly, or via Cloudflare Worker)
          │
          ├── Insufficient info? → Post clarifying comment → Wait for reply
          │
@@ -38,7 +35,7 @@ PR link(s) posted to Jira + ticket transitioned to "Ready for Review"
 ### Cron path (agent self-assigns)
 
 ```
-Inngest cron fires (default: every 5 minutes)
+BullMQ cron fires (default: every 5 minutes)
          │
          ▼
 Agent searches Jira via configured JQL per board
@@ -47,7 +44,7 @@ Agent searches Jira via configured JQL per board
 Unassigned matching tickets claimed via Redis NX lock
          │
          ▼
-Agent assigns ticket to itself → fires jirabot/ticket.assigned
+Agent assigns ticket to itself → enqueues ticket job
          │
          └── Normal webhook path from here
 ```
@@ -58,10 +55,10 @@ Agent assigns ticket to itself → fires jirabot/ticket.assigned
 User DMs or @mentions the Slack bot
          │
          ▼
-Cloudflare Worker validates Slack signature + enqueues event
+Agent receives POST /webhook/slack (directly, or via Cloudflare Worker)
          │
          ▼
-Inngest handle-slack-command function parses intent (Claude Haiku)
+handle-slack-command worker parses intent (Claude Haiku)
          │
          ├── "create a ticket for X" → Jira ticket created → bot replies with ticket key
          └── Unknown intent         → bot replies with a helpful message
@@ -71,21 +68,23 @@ Inngest handle-slack-command function parses intent (Claude Haiku)
 
 ## Architecture
 
-| Layer | Technology | Purpose |
-|-------|-----------|---------|
-| Webhook receiver | Cloudflare Worker | Validates Jira + Slack webhooks, enqueues to Inngest |
-| Job queue | Inngest | Durable jobs, retries, concurrency limiting, cron scheduling |
-| Agent worker | Fly.io (Docker/Node 22) | Runs Claude Code, manages Git, calls Jira/GitHub/Slack APIs |
-| State store | Upstash Redis | Ticket state machine, attempt history, self-assignment NX locks |
-| Code generation | Claude Code CLI | Reads files, runs tests, iterates until passing |
+The system can run fully self-hosted (Docker Compose) or on managed cloud services.
 
-### Inngest functions
+| Layer | Self-hosted | Cloud |
+|-------|-------------|-------|
+| Webhook receiver | Express routes in agent (port 3001) | Cloudflare Worker |
+| Job queue | BullMQ (Redis-backed) | Inngest |
+| Agent runtime | Docker Compose | Fly.io |
+| State store | Local Redis container | Upstash Redis |
+| Code generation | Claude Code CLI | Claude Code CLI |
+
+### Worker functions
 
 | Function | Trigger | Purpose |
 |----------|---------|---------|
-| `process-ticket` | `jirabot/ticket.assigned` event | Main coding job |
-| `scan-and-assign` | Cron (`SCAN_CRON_SCHEDULE`) | Self-assignment loop |
-| `handle-slack-command` | `jirabot/slack.command` event | Slack message handling |
+| `process-ticket` | `ticket-jobs` queue | Main coding job (concurrency 5, retries 3) |
+| `scan-and-assign` | Cron (`SCAN_CRON_SCHEDULE`) | Self-assignment loop (concurrency 1) |
+| `handle-slack-command` | `slack-jobs` queue | Slack message handling (retries 2) |
 
 ---
 
@@ -124,30 +123,25 @@ Create a GitHub App for authenticated repo access:
 
 Get a key from [console.anthropic.com](https://console.anthropic.com). The bot uses `claude-sonnet-4-6` for sufficiency checks and `claude-haiku-4-5` for Slack intent parsing.
 
-### 4. Upstash Redis
+### 4. Redis
 
-1. Create a free database at [console.upstash.com](https://console.upstash.com)
-2. Copy the **Redis URL** (the `rediss://` TLS URL, not the plain `redis://` one)
+**Self-hosted:** Redis runs automatically as part of Docker Compose — no setup needed.
 
-### 5. Inngest
+**Cloud:** Create a free database at [console.upstash.com](https://console.upstash.com) and copy the `rediss://` TLS URL.
 
-1. Create a free account at [inngest.com](https://www.inngest.com)
-2. From the dashboard, copy your **Event Key** and **Signing Key**
-3. After deploying the agent to Fly.io, register the worker URL in the Inngest dashboard (see deployment steps)
-
-### 6. Fly.io
+### 5. Fly.io *(cloud deployment only)*
 
 1. Install the CLI: `brew install flyctl` (or see [fly.io/docs](https://fly.io/docs/hands-on/install-flyctl/))
 2. Log in: `fly auth login`
 3. The app name is `jirabot-agent` (set in `packages/agent/fly.toml`)
 
-### 7. Cloudflare Account
+### 6. Cloudflare Account *(cloud deployment only)*
 
 1. Install Wrangler: `npm install -g wrangler`
 2. Log in: `wrangler login`
 3. The worker name is `jirabot-webhook` (set in `packages/worker/wrangler.toml`)
 
-### 8. Slack App *(optional — required for Slack features)*
+### 7. Slack App *(optional — required for Slack features)*
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App → From scratch**
 2. Give it a name (e.g. `JiraBot`) and select your workspace
@@ -169,9 +163,9 @@ Get a key from [console.anthropic.com](https://console.anthropic.com). The bot u
 
 ## Environment Variables
 
-### Agent Worker (Fly.io)
+### Agent
 
-All secrets are set via `fly secrets set`. Never commit these to source.
+Set these in `.env` (self-hosted) or via `fly secrets set` (Fly.io). Never commit secrets to source.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -184,21 +178,20 @@ All secrets are set via `fly secrets set`. Never commit these to source.
 | `GITHUB_APP_PRIVATE_KEY` | ✅ | PEM private key contents |
 | `GITHUB_APP_INSTALLATION_ID` | ✅ | Numeric installation ID |
 | `ANTHROPIC_API_KEY` | ✅ | Anthropic API key |
-| `REDIS_URL` | ✅ | Upstash Redis URL (`rediss://...`) |
-| `INNGEST_SIGNING_KEY` | ✅ | Inngest signing key |
+| `REDIS_URL` | ✅ | Redis URL. Self-hosted: `redis://localhost:6379`. Upstash: `rediss://...` |
 | `BOARDS_CONFIG` | ✅ | JSON array of board configs (see below) |
 | `MAX_ATTEMPTS` | | Max coding attempts before escalation (default: `3`) |
 | `SLACK_BOT_TOKEN` | | Slack bot OAuth token (`xoxb-...`). Required for Slack features. |
 | `SLACK_SIGNING_SECRET` | | Slack signing secret. Required for Slack features. |
 | `SCAN_CRON_SCHEDULE` | | Cron expression for self-assignment scan (default: `*/5 * * * *`) |
 
-### Cloudflare Worker
+### Cloudflare Worker *(cloud deployment only)*
 
 Secrets set via `wrangler secret put`.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `JIRA_WEBHOOK_SECRET` | ✅ | Must match the agent worker value |
+| `JIRA_WEBHOOK_SECRET` | ✅ | Must match the agent value |
 | `INNGEST_EVENT_KEY` | ✅ | Inngest event key |
 | `JIRA_AGENT_ACCOUNT_ID` | ✅ | Jira accountId of the agent user (filters webhook events) |
 | `SLACK_SIGNING_SECRET` | | Slack signing secret. Required to receive Slack webhooks. |
@@ -246,7 +239,101 @@ Multiple boards can be configured. Each `jiraProject` key must be unique.
 
 ---
 
-## Deployment
+## Local / Self-Hosted Deployment
+
+Run the full system on any machine with Docker — no Cloudflare, Inngest, or Fly.io required. Jira, GitHub, and the Anthropic API are the only external dependencies.
+
+### Prerequisites
+
+- Docker and Docker Compose
+- A publicly reachable URL so Jira can send webhooks (use [ngrok](https://ngrok.com) if running locally, or deploy to any VPS)
+
+### Step 1: Configure environment
+
+```bash
+cp .env.example .env
+```
+
+Fill in `.env` with your credentials. The `REDIS_URL` is overridden automatically by Docker Compose — you can leave it as `redis://localhost:6379` in `.env`.
+
+### Step 2: Start with Docker Compose
+
+```bash
+docker-compose up --build
+```
+
+This starts two containers:
+
+| Container | Purpose |
+|-----------|---------|
+| `redis` | Redis 7 on port 6379 — job queue + state store |
+| `agent` | JiraBot agent on port 3001 |
+
+Verify it's healthy:
+
+```bash
+curl http://localhost:3001/health
+# → {"status":"ok"}
+```
+
+### Step 3: Expose the agent publicly
+
+Jira needs an HTTPS URL to deliver webhook events. If running on a local machine:
+
+```bash
+ngrok http 3001
+# Forwarding: https://abc123.ngrok.io -> http://localhost:3001
+```
+
+Copy the HTTPS forwarding URL. On a VPS, use the server's public IP or domain with a reverse proxy (nginx, Caddy, etc.) pointing to port 3001.
+
+### Step 4: Configure the Jira Webhook
+
+1. Log in to Jira as an administrator
+2. Go to **Settings → System → WebHooks → Create a WebHook**
+3. Fill in:
+   - **URL:** `https://<your-public-url>/webhook/jira`
+   - **Secret:** The value you set for `JIRA_WEBHOOK_SECRET` in `.env`
+   - **Events:** Check **Issue → updated**
+4. Click **Create**
+
+### Step 5: Configure Slack *(optional)*
+
+1. In your Slack App settings → **Event Subscriptions**
+2. Set **Request URL** to `https://<your-public-url>/webhook/slack`
+3. Slack sends a verification challenge — the agent responds automatically
+4. Save and reinstall the app if prompted
+
+### Logs and monitoring
+
+```bash
+# Follow agent logs
+docker-compose logs -f agent
+
+# Follow all containers
+docker-compose logs -f
+```
+
+Key log prefixes to watch:
+
+| Prefix | Meaning |
+|--------|---------|
+| `[queue]` | Worker startup, cron registration |
+| `[scan]` | Self-assignment cron results |
+| `[job-*]` | Per-ticket job progress |
+| `[webhook/jira]` | Incoming Jira webhook events |
+| `[webhook/slack]` | Incoming Slack events |
+
+### Stopping
+
+```bash
+docker-compose down           # stop containers, keep Redis data
+docker-compose down -v        # stop containers and delete Redis data
+```
+
+---
+
+## Cloud Deployment (Cloudflare + Inngest + Fly.io)
 
 ### Step 1: Install dependencies
 
@@ -326,18 +413,14 @@ fly status --config packages/agent/fly.toml
 fly logs --config packages/agent/fly.toml
 ```
 
-The agent listens on port `3001` with the Inngest handler at `/api/inngest`.
+The agent listens on port `3001`. Verify it's running:
 
-### Step 4: Register the Agent with Inngest
+```bash
+fly status --config packages/agent/fly.toml
+# curl https://jirabot-agent.fly.dev/health → {"status":"ok"}
+```
 
-1. Go to your [Inngest dashboard](https://app.inngest.com)
-2. Navigate to **Apps → Sync new app**
-3. Enter your Fly.io app URL: `https://jirabot-agent.fly.dev/api/inngest`
-4. Inngest will sync all three functions: `process-ticket`, `scan-and-assign`, `handle-slack-command`
-5. Verify all functions appear in **Functions** with status `Active`
-6. The `scan-and-assign` cron function will begin firing on its configured schedule automatically
-
-### Step 5: Configure the Jira Webhook
+### Step 4: Configure the Jira Webhook
 
 1. Log in to Jira as an **administrator**
 2. Go to **Settings → System → WebHooks**
@@ -444,16 +527,16 @@ npm test
 npm run build
 ```
 
-### Run the agent locally
+### Run the agent locally (without Docker)
 
 ```bash
 cp .env.example .env
-# Fill in values in .env
+# Fill in values in .env — point REDIS_URL at a local Redis instance
 
 npm run dev:agent
 ```
 
-### Run the Cloudflare Worker locally
+### Run the Cloudflare Worker locally *(cloud deployment only)*
 
 ```bash
 npm run dev:worker
@@ -463,22 +546,21 @@ npm run dev:worker
 
 ## Monitoring
 
-### Inngest Dashboard
+### Self-hosted (Docker Compose)
 
-The [Inngest dashboard](https://app.inngest.com) provides:
-- Real-time job status (running, completed, failed) for all three functions
-- Full event logs and step traces
-- Retry history and error details
-- Cron function execution history (`scan-and-assign`)
+```bash
+docker-compose logs -f agent        # live agent logs
+docker-compose logs -f              # all containers
+docker-compose ps                   # container status
+curl http://localhost:3001/health   # health check
+```
 
-### Fly.io Logs
+### Cloud (Fly.io + Cloudflare)
 
 ```bash
 fly logs --config packages/agent/fly.toml
 fly status --config packages/agent/fly.toml
 ```
-
-### Cloudflare Worker Logs
 
 ```bash
 cd packages/worker
@@ -491,25 +573,26 @@ wrangler tail
 
 ### Bot doesn't respond to ticket assignment
 
-1. Check the Worker is receiving requests: `wrangler tail` in `packages/worker`
-2. Verify the Jira webhook URL and secret match
+1. Check `curl http://localhost:3001/health` returns `{"status":"ok"}`
+2. Verify the Jira webhook URL points to the agent and the secret matches `JIRA_WEBHOOK_SECRET`
 3. Confirm `JIRA_AGENT_ACCOUNT_ID` matches the agent user's actual Jira account ID
-4. Check the Inngest dashboard for queued or failed events
+4. Check agent logs: `docker-compose logs -f agent` (self-hosted) or `fly logs` (Fly.io)
+5. Look for `[webhook/jira]` log lines — if missing, Jira is not reaching the agent
 
 ### Self-assignment cron isn't running
 
-1. Confirm `scan-and-assign` appears as **Active** in the Inngest dashboard → Functions
+1. Look for `[queue] Workers started. Scan cron: */5 * * * *` in startup logs — if missing, the queue failed to start (usually a Redis connection issue)
 2. Verify at least one board in `BOARDS_CONFIG` has an `autoAssignJql` field set
-3. Check Fly.io logs for `[scan]` prefixed lines
-4. If the cron schedule was changed via `SCAN_CRON_SCHEDULE`, re-deploy the agent so Inngest re-syncs the function definition
+3. Watch for `[scan]` prefixed log lines at each cron interval
+4. If the cron schedule was changed via `SCAN_CRON_SCHEDULE`, restart the agent to apply the new schedule
 
 ### Slack bot doesn't respond
 
-1. Confirm `SLACK_SIGNING_SECRET` is set on both the **Worker** and `SLACK_BOT_TOKEN` on the **Agent**
+1. Confirm `SLACK_SIGNING_SECRET` and `SLACK_BOT_TOKEN` are both set in the agent's environment
 2. Verify the Slack Events API **Request URL** is set to `.../webhook/slack` and shows a ✅ tick
 3. Confirm the bot is invited to the DM or channel (`/invite @JiraBot`)
-4. Check `wrangler tail` for `Invalid Slack webhook signature` errors — this usually means a signing secret mismatch
-5. Check the Inngest dashboard for `handle-slack-command` events
+4. Check agent logs for `[webhook/slack]` lines — `Invalid Slack signature` means a signing secret mismatch
+5. Confirm Slack events are appearing in the `slack-jobs` BullMQ queue (check Redis with `redis-cli llen bull:slack-jobs:wait`)
 
 ### "No board config found for project" error
 
@@ -540,6 +623,15 @@ Authorization: Basic base64(email:api_token)
 
 ## Infrastructure Costs (estimated at ~50 tickets/day)
 
+### Self-hosted
+
+| Service | Estimated Monthly Cost |
+|---------|----------------------|
+| VPS (2GB RAM, e.g. Hetzner CX22) | ~$5 |
+| **Total infra** | **~$5/month** |
+
+### Cloud (Cloudflare + Inngest + Fly.io)
+
 | Service | Estimated Monthly Cost |
 |---------|----------------------|
 | Cloudflare Workers | Free tier sufficient |
@@ -548,7 +640,7 @@ Authorization: Basic base64(email:api_token)
 | Inngest | Free tier sufficient |
 | **Total infra** | **~$20–30/month** |
 
-Claude Code API usage (Anthropic) will be the dominant cost at scale. The Slack intent parsing uses the cheaper Haiku model to minimise cost per message.
+Claude Code API usage (Anthropic) will be the dominant cost at scale regardless of deployment mode. The Slack intent parsing uses the cheaper Haiku model to minimise cost per message.
 
 ---
 
@@ -572,14 +664,17 @@ jirabot/
 │   │       │   ├── code-executor.ts # Claude Code CLI subprocess
 │   │       │   └── redis.ts         # Ticket state machine + NX claim locks
 │   │       ├── job.ts               # Multi-repo job orchestrator
-│   │       └── inngest.ts           # process-ticket, scan-and-assign, handle-slack-command
-│   └── worker/          # Cloudflare Worker: webhook receiver
+│   │       ├── inngest.ts           # process-ticket, scan-and-assign, handle-slack-command (plain async handlers)
+│   │       ├── queue.ts             # BullMQ queues, workers, cron scheduling
+│   │       └── webhook-handler.ts   # Express router — /webhook/jira, /webhook/slack, /health
+│   └── worker/          # Cloudflare Worker: webhook receiver (cloud deployment only)
 │       └── src/
 │           ├── webhook.ts           # Jira HMAC validation + payload extraction
 │           ├── slack.ts             # Slack HMAC validation + event extraction
 │           └── index.ts             # CF Worker fetch handler (routes /webhook/jira + /webhook/slack)
 ├── docs/
 │   └── prd.md           # Product requirements document
+├── docker-compose.yml   # Self-hosted: Redis + agent
 ├── .env.example         # Environment variable reference
 └── package.json         # npm workspaces root
 ```
