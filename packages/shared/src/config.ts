@@ -25,6 +25,16 @@ export const SlackConfigSchema = z.object({
   signingSecret: z.string().min(1),
 });
 
+export const GitHubAppConfigSchema = z.object({
+  appId: z.number().positive(),
+  privateKey: z.string().min(1),
+  installationId: z.number().positive(),
+});
+
+export const GitHubPatConfigSchema = z.object({
+  pat: z.string().min(1),
+});
+
 export const AgentConfigSchema = z.object({
   jira: z.object({
     host: z.string().min(1),
@@ -33,11 +43,7 @@ export const AgentConfigSchema = z.object({
     agentAccountId: z.string().min(1),
     webhookSecret: z.string().min(1),
   }),
-  github: z.object({
-    appId: z.number().positive(),
-    privateKey: z.string().min(1),
-    installationId: z.number().positive(),
-  }),
+  github: z.union([GitHubAppConfigSchema, GitHubPatConfigSchema]),
   boards: z.array(BoardConfigSchema).min(1),
   codingAgent: z.literal('claude-code'),
   maxAttempts: z.number().positive().int().default(3),
@@ -83,11 +89,13 @@ export function loadConfigFromEnv(): AgentConfig {
       agentAccountId: requireEnv('JIRA_AGENT_ACCOUNT_ID'),
       webhookSecret: requireEnv('JIRA_WEBHOOK_SECRET'),
     },
-    github: {
-      appId: Number(requireEnv('GITHUB_APP_ID')),
-      privateKey: requireEnv('GITHUB_APP_PRIVATE_KEY'),
-      installationId: Number(requireEnv('GITHUB_APP_INSTALLATION_ID')),
-    },
+    github: optionalEnv('GITHUB_PAT')
+      ? { pat: requireEnv('GITHUB_PAT') }
+      : {
+          appId: Number(requireEnv('GITHUB_APP_ID')),
+          privateKey: requireEnv('GITHUB_APP_PRIVATE_KEY').replace(/\\n/g, '\n'),
+          installationId: Number(requireEnv('GITHUB_APP_INSTALLATION_ID')),
+        },
     boards: (() => {
       const raw = process.env['BOARDS_CONFIG'] ?? '[]';
       try {

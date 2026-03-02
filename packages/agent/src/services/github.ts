@@ -23,31 +23,26 @@ export interface GitHubService {
 }
 
 export function createGitHubService(config: GitHubConfig): GitHubService {
-  async function getOctokit(): Promise<Octokit> {
-    const auth = createAppAuth({
-      appId: config.appId,
-      privateKey: config.privateKey,
-      installationId: config.installationId,
-    });
-    const { token } = await auth({ type: 'installation' });
-    return new Octokit({ auth: token });
+  async function getToken(): Promise<string> {
+    if ('pat' in config) {
+      return config.pat;
+    }
+    try {
+      const auth = createAppAuth({
+        appId: config.appId,
+        privateKey: config.privateKey,
+        installationId: config.installationId,
+      });
+      const result = await auth({ type: 'installation' });
+      return result.token;
+    } catch (err) {
+      throw new Error(`Failed to get GitHub installation token: ${String(err)}`);
+    }
   }
 
   return {
     async getInstallationToken() {
-      let token: string;
-      try {
-        const auth = createAppAuth({
-          appId: config.appId,
-          privateKey: config.privateKey,
-          installationId: config.installationId,
-        });
-        const result = await auth({ type: 'installation' });
-        token = result.token;
-      } catch (err) {
-        throw new Error(`Failed to get GitHub installation token: ${String(err)}`);
-      }
-      return token;
+      return getToken();
     },
 
     async createPR({ repo, title, body, head, base }) {
@@ -58,12 +53,8 @@ export function createGitHubService(config: GitHubConfig): GitHubService {
       const owner = repo.slice(0, slashIndex);
       const repoName = repo.slice(slashIndex + 1);
 
-      let octokit: Octokit;
-      try {
-        octokit = await getOctokit();
-      } catch (err) {
-        throw new Error(`Failed to authenticate with GitHub App: ${String(err)}`);
-      }
+      const token = await getToken();
+      const octokit = new Octokit({ auth: token });
 
       try {
         const { data } = await octokit.pulls.create({

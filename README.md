@@ -100,24 +100,32 @@ Before deploying, you need accounts and credentials for each service below.
 - The **account ID** of the agent user (visible in the user profile URL or via the Jira REST API)
 - The **Jira status names** you want for "Ready for Review" and "Needs Clarity" (must match exactly)
 
-### 2. GitHub App
+### 2. GitHub
 
-Create a GitHub App for authenticated repo access:
+Choose **one** of these auth methods:
+
+**Option A: Personal Access Token** *(simpler — recommended for local dev)*
+
+1. Go to **github.com → Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate new token**
+2. Select the **`repo`** scope (full control of private repositories)
+3. Generate and copy the token → `GITHUB_PAT`
+
+**Option B: GitHub App** *(recommended for production)*
 
 1. Go to **GitHub → Settings → Developer settings → GitHub Apps → New GitHub App**
-2. Set **Homepage URL** to anything (e.g. your Fly.io app URL)
+2. Set **Homepage URL** to anything (e.g. `http://localhost:3001`)
 3. Disable **Webhook** (the bot doesn't receive GitHub webhooks)
 4. Under **Permissions → Repository permissions**, grant:
    - `Contents`: Read & write
    - `Pull requests`: Read & write
    - `Metadata`: Read-only
 5. Click **Create GitHub App**
-6. Note the **App ID** from the app settings page
-7. Generate a **private key** (PEM format) — download and keep it safe
+6. Note the **App ID** → `GITHUB_APP_ID`
+7. Generate a **private key** (PEM format) → `GITHUB_APP_PRIVATE_KEY`
 8. **Install the app** on your organisation or specific repositories
-9. Note the **Installation ID** from the URL after installation: `github.com/organizations/{org}/settings/installations/{INSTALLATION_ID}`
+9. Note the **Installation ID** from the URL → `GITHUB_APP_INSTALLATION_ID`
 
-> **Multi-repo:** If tickets span multiple repositories, install the GitHub App on all of them.
+> **Multi-repo:** If tickets span multiple repositories, install the GitHub App (or ensure the PAT has access) on all of them.
 
 ### 3. Anthropic API Key
 
@@ -174,9 +182,12 @@ Set these in `.env` (self-hosted) or via `fly secrets set` (Fly.io). Never commi
 | `JIRA_API_TOKEN` | ✅ | Jira API token for the agent user |
 | `JIRA_AGENT_ACCOUNT_ID` | ✅ | Jira accountId of the agent user |
 | `JIRA_WEBHOOK_SECRET` | ✅ | A random string used to sign Jira webhooks (you choose this) |
-| `GITHUB_APP_ID` | ✅ | Numeric GitHub App ID |
-| `GITHUB_APP_PRIVATE_KEY` | ✅ | PEM private key contents |
-| `GITHUB_APP_INSTALLATION_ID` | ✅ | Numeric installation ID |
+| `GITHUB_PAT` | ✅\* | GitHub Personal Access Token with `repo` scope |
+| `GITHUB_APP_ID` | ✅\* | Numeric GitHub App ID |
+| `GITHUB_APP_PRIVATE_KEY` | ✅\* | PEM private key contents |
+| `GITHUB_APP_INSTALLATION_ID` | ✅\* | Numeric installation ID |
+
+\* Set **either** `GITHUB_PAT` **or** the three `GITHUB_APP_*` variables, not both.
 | `ANTHROPIC_API_KEY` | ✅ | Anthropic API key |
 | `REDIS_URL` | ✅ | Redis URL. Self-hosted: `redis://localhost:6379`. Upstash: `rediss://...` |
 | `BOARDS_CONFIG` | ✅ | JSON array of board configs (see below) |
@@ -246,75 +257,68 @@ Run the full system on any machine with Docker — no Cloudflare, Inngest, or Fl
 ### Prerequisites
 
 - Docker and Docker Compose
-- A publicly reachable URL so Jira can send webhooks (use [ngrok](https://ngrok.com) if running locally, or deploy to any VPS)
+- ngrok (`brew install ngrok`) — so Jira can reach your local machine
+- Python 3 (pre-installed on macOS)
 
-### Step 1: Configure environment
+### Quick start (scripted)
+
+The setup wizard prompts for your credentials, auto-fetches the Jira account ID, and writes `.env`:
+
+```bash
+./scripts/setup.sh
+```
+
+Then start everything — Docker Compose, ngrok, and Jira webhook registration — in one command:
+
+```bash
+./scripts/start-local.sh
+```
+
+The start script:
+1. Builds and starts the agent + Redis containers
+2. Starts an ngrok tunnel on port 3001
+3. Registers (or updates) a Jira webhook pointing to the ngrok URL
+4. Prints the Slack Event Subscriptions URL if Slack is configured
+
+Stop everything with `Ctrl+C` or `./scripts/stop-local.sh`.
+
+### Manual setup
+
+If you prefer to configure things yourself:
+
+**Step 1:** Copy and fill in `.env`:
 
 ```bash
 cp .env.example .env
 ```
 
-Fill in `.env` with your credentials. The `REDIS_URL` is overridden automatically by Docker Compose — you can leave it as `redis://localhost:6379` in `.env`.
-
-### Step 2: Start with Docker Compose
+**Step 2:** Start with Docker Compose:
 
 ```bash
 docker-compose up --build
 ```
-
-This starts two containers:
 
 | Container | Purpose |
 |-----------|---------|
 | `redis` | Redis 7 on port 6379 — job queue + state store |
 | `agent` | JiraBot agent on port 3001 |
 
-Verify it's healthy:
-
-```bash
-curl http://localhost:3001/health
-# → {"status":"ok"}
-```
-
-### Step 3: Expose the agent publicly
-
-Jira needs an HTTPS URL to deliver webhook events. If running on a local machine:
+**Step 3:** Expose the agent publicly:
 
 ```bash
 ngrok http 3001
-# Forwarding: https://abc123.ngrok.io -> http://localhost:3001
 ```
 
-Copy the HTTPS forwarding URL. On a VPS, use the server's public IP or domain with a reverse proxy (nginx, Caddy, etc.) pointing to port 3001.
+**Step 4:** Create a Jira webhook: **Settings → System → WebHooks → Create**. Set the URL to `https://<ngrok-url>/webhook/jira`, the secret to your `JIRA_WEBHOOK_SECRET`, and check **Issue → updated**.
 
-### Step 4: Configure the Jira Webhook
-
-1. Log in to Jira as an administrator
-2. Go to **Settings → System → WebHooks → Create a WebHook**
-3. Fill in:
-   - **URL:** `https://<your-public-url>/webhook/jira`
-   - **Secret:** The value you set for `JIRA_WEBHOOK_SECRET` in `.env`
-   - **Events:** Check **Issue → updated**
-4. Click **Create**
-
-### Step 5: Configure Slack *(optional)*
-
-1. In your Slack App settings → **Event Subscriptions**
-2. Set **Request URL** to `https://<your-public-url>/webhook/slack`
-3. Slack sends a verification challenge — the agent responds automatically
-4. Save and reinstall the app if prompted
+**Step 5 (optional):** Set Slack Event Subscriptions URL to `https://<ngrok-url>/webhook/slack`.
 
 ### Logs and monitoring
 
 ```bash
-# Follow agent logs
-docker-compose logs -f agent
-
-# Follow all containers
-docker-compose logs -f
+docker-compose logs -f agent   # follow agent logs
+docker-compose logs -f         # follow all containers
 ```
-
-Key log prefixes to watch:
 
 | Prefix | Meaning |
 |--------|---------|
@@ -672,6 +676,10 @@ jirabot/
 │           ├── webhook.ts           # Jira HMAC validation + payload extraction
 │           ├── slack.ts             # Slack HMAC validation + event extraction
 │           └── index.ts             # CF Worker fetch handler (routes /webhook/jira + /webhook/slack)
+├── scripts/
+│   ├── setup.sh             # Interactive setup wizard — prompts, validates, writes .env
+│   ├── start-local.sh       # Starts Docker Compose + ngrok + registers Jira webhook
+│   └── stop-local.sh        # Stops ngrok + Docker Compose
 ├── docs/
 │   └── prd.md           # Product requirements document
 ├── docker-compose.yml   # Self-hosted: Redis + agent
